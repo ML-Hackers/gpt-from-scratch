@@ -35,15 +35,6 @@ class ScriptArguments:
     learning_rate: Optional[float] = field(default=2e-4)
     max_grad_norm: Optional[float] = field(default=0.3)
     weight_decay: Optional[float] = field(default=0.001)
-    lora_alpha: Optional[int] = field(default=16)
-    lora_dropout: Optional[float] = field(default=0.1)
-    lora_r: Optional[int] = field(default=64)
-    lora_target_modules: Optional[str] = field(
-        default="q_proj,k_proj,v_proj,o_proj,down_proj,up_proj,gate_proj",
-        metadata={
-            "help": "comma separated list of target modules to apply LoRA layers to"
-        },
-    )
     max_seq_length: Optional[int] = field(default=512)
     model_name: Optional[str] = field(
         default="Salesforce/codegen25-7b-multi",
@@ -52,28 +43,20 @@ class ScriptArguments:
         },
     )
     dataset_name: Optional[str] = field(
-        default="timdettmers/openassistant-guanaco",
+        default="wikimedia/wikipedia",
         metadata={"help": "The preference dataset to use."},
     )
     dataset_path: Optional[str] = field(
         default="",
         metadata={"help": "The path to local dataset to use."},
     )
-    use_4bit: Optional[bool] = field(
-        default=True,
-        metadata={"help": "Activate 4bit precision base model loading"},
+    dataset_subset: Optional[str] = field(
+        default="",
+        metadata={"help": "Subset of the dataset to use"}
     )
-    use_nested_quant: Optional[bool] = field(
-        default=False,
-        metadata={"help": "Activate nested quantization for 4bit base models"},
-    )
-    bnb_4bit_compute_dtype: Optional[str] = field(
-        default="float16",
-        metadata={"help": "Compute dtype for 4bit base models"},
-    )
-    bnb_4bit_quant_type: Optional[str] = field(
-        default="nf4",
-        metadata={"help": "Quantization type fp4 or nf4"},
+    dataset_num_entries: Optional[int] = field(
+        default=-1,
+        metadata={"help": "Number of entries from the dataset to use. Set to -1 to use all entries."}
     )
     num_train_epochs: Optional[int] = field(
         default=1,
@@ -124,14 +107,6 @@ class ScriptArguments:
     use_flash_attn: Optional[bool] = field(
         default=False,
         metadata={"help": "Enables Flash attention for training."},
-    )
-    use_8bit_quantization: Optional[bool] = field(
-        default=False,
-        metadata={"help": "Enables loading model in 8bit."},
-    )
-    use_4bit_quantization: Optional[bool] = field(
-        default=False,
-        metadata={"help": "Enables loading model in 4bit."},
     )
     use_gradient_checkpointing: Optional[bool] = field(
         default=False,
@@ -200,6 +175,7 @@ def main(args):
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         max_seq_length=args.max_seq_length,
+        dataset_num_proc=args.num_workers
     )
 
     # trainer = Trainer(model=model, args=training_arguments, train_dataset=train_dataset, eval_dataset=eval_dataset)
