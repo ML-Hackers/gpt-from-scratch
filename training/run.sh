@@ -1,3 +1,3 @@
 python train.py \
---config "configs/mistral_train.yaml" \
+--config "configs/gpt2_train.yaml" \
 --dataset_path "../outputs"
