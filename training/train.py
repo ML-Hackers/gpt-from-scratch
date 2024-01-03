@@ -156,6 +156,9 @@ class ScriptArguments:
     cache_dir: Optional[str] = field(
         default=None, metadata={"help": "Where to store the pretrained models downloaded"}
     )
+    use_pretrained: Optional[bool] = field(
+        default=False, metadata={"help": "Whether to use pretrained model"}
+    )
 
 
 def main(args):
