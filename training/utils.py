@@ -15,10 +15,6 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
 )
-from langchain.prompts import ChatPromptTemplate, ChatMessagePromptTemplate
-from langchain.schema.messages import SystemMessage
-from prompts import template
-
 
 class SaveDeepSpeedModelCallback(TrainerCallback):
     def __init__(self, trainer, save_steps=500):
@@ -134,18 +130,9 @@ def chars_token_ratio(dataset, tokenizer, data_column, nb_examples=400):
 
     return total_characters / total_tokens
 
-
-def load_sentimentdataset_from_files(dataset_path: str, tokenizer):
+def load_from_files(dataset_path: str):
     """
-    Load dataset from files and preprocess it for sentiment understanding.
-
-    Args:
-        dataset_path (str): The path to the dataset directory.
-        tokenizer: The tokenizer object used for tokenization.
-
-    Returns:
-        dataset: The preprocessed dataset.
-
+    Load dataset from files.
     """
     data_files = {
         "train": os.path.join(dataset_path, "train_dataset.csv"),
@@ -153,46 +140,17 @@ def load_sentimentdataset_from_files(dataset_path: str, tokenizer):
     }
     dataset = load_dataset("csv", data_files=data_files)
 
-    eos_token = tokenizer.eos_token
-
-    def preprocess(samples, skip_target=False):
-        batch = []
-        for input_text, output_text in zip(samples["text"], samples["label"]):
-            output_text = {-1: "negative", 0: "neutral", 1: "positive"}.get(output_text)
-            prompt = ChatPromptTemplate.from_messages(
-                [
-                    SystemMessage(
-                        content=(
-                            "You are an expert in sentiment understanding, analyse the statement and respond in one word: positive, negative, or neutral."
-                        )
-                    ),
-                    ChatMessagePromptTemplate.from_template(
-                        role="User", template=template, input_variables=["input"]
-                    ),
-                ]
-            )
-            formatted_conv = prompt.format(input=input_text)
-            if not skip_target:
-                formatted_conv += f"Assistant: {output_text} {eos_token}"
-
-            batch.append(formatted_conv)
-        return {"content": batch}
-
-    dataset = dataset.map(
-        preprocess, batched=True, remove_columns=dataset["train"].column_names
-    )
     return dataset
 
 
 def create_datasets(tokenizer, args):
     if args.dataset_path:
-        dataset = load_sentimentdataset_from_files(args.dataset_path, tokenizer)
+        dataset = load_from_files(args.dataset_path)
     else:
         dataset = load_dataset(
             args.dataset_name,
             use_auth_token=False,
-            num_proc=args.num_workers,
-            download_mode="force_redownload",
+            num_proc=args.num_workers
         )
     train_data = dataset["train"]
     valid_data = dataset["test"]
@@ -230,20 +188,20 @@ def create_datasets(tokenizer, args):
 
 def create_and_prepare_model(args):
     bnb_config = None
-    load_in_8bit = args.use_8bit_qunatization
+    load_in_8bit = args.use_8bit_quantization
 
-    if args.use_4bit_qunatization:
+    if args.use_4bit_quantization:
         print("USING 4BIT QUANTIZATION")
         compute_dtype = getattr(torch, args.bnb_4bit_compute_dtype)
 
         bnb_config = BitsAndBytesConfig(
-            load_in_4bit=args.use_4bit_qunatization,
+            load_in_4bit=args.use_4bit_quantization,
             bnb_4bit_quant_type=args.bnb_4bit_quant_type,
             bnb_4bit_compute_dtype=compute_dtype,
             bnb_4bit_use_double_quant=args.use_nested_quant,
         )
 
-        if compute_dtype == torch.float16 and args.use_4bit_qunatization:
+        if compute_dtype == torch.float16 and args.use_4bit_quantization:
             major, _ = torch.cuda.get_device_capability()
             if major >= 8:
                 print("=" * 80)
@@ -256,14 +214,20 @@ def create_and_prepare_model(args):
         args.model_name,
         load_in_8bit=load_in_8bit,
         quantization_config=bnb_config,
-        use_flash_attention_2=args.use_flash_attn,
+        # use_flash_attention_2=args.use_flash_attn,
         # device_map=device_map,
         # use_cache=not args.use_gradient_checkpointing,
         trust_remote_code=True,
         cache_dir=args.cache_dir,
         token=os.environ.get("HF_API_TOKEN", None)
     )
+    def print_num_params(model):
+        num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Number of parameters in the model: {(num_params / 1e9):.2f}B")
+
+    print_num_params(model)
     model.init_weights()
+    
 
 
     if args.use_gradient_checkpointing:

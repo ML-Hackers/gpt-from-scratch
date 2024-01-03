@@ -74,11 +74,11 @@ if __name__ == "__main__":
             # "--config_file training/configs/deepspeed_config.yaml",
             "python",
             "training/train.py",
-            "--config training/configs/gpt_train.yaml",
+            "--config training/configs/gpt2_train.yaml",
             # "--dataset_path",
             # input_folder,
-            "--dateset-name",
-            "wikipedia",
+            # "--dateset-name",
+            # "wikipedia",
             "--output_dir",
             output_dataset,
             "--cache_dir",
@@ -95,7 +95,7 @@ if __name__ == "__main__":
 
     pipeline = Pipeline(ws, steps=dataset_creation)
     run = exp.submit(pipeline)
-    description = "LLM training. Deepspeed"
+    description = "LLM training"
     run.description = description
     run.display_name = description
     run.wait_for_completion(show_output=True)

@@ -5,7 +5,9 @@ import yaml
 from typing import Optional
 
 from transformers import HfArgumentParser, TrainingArguments
-from trl import Trainer
+from transformers import Trainer
+from trl import SFTTrainer
+
 from utils import (
     SaveDeepSpeedModelCallback,
     create_and_prepare_model,
@@ -94,7 +96,7 @@ class ScriptArguments:
         metadata={"help": "Enables gradient checkpointing."},
     )
     optim: Optional[str] = field(
-        default="paged_adamw_32bit",
+        default="adamw_torch",
         metadata={"help": "The optimizer to use."},
     )
     lr_scheduler_type: str = field(
@@ -123,11 +125,11 @@ class ScriptArguments:
         default=False,
         metadata={"help": "Enables Flash attention for training."},
     )
-    use_8bit_qunatization: Optional[bool] = field(
+    use_8bit_quantization: Optional[bool] = field(
         default=False,
         metadata={"help": "Enables loading model in 8bit."},
     )
-    use_4bit_qunatization: Optional[bool] = field(
+    use_4bit_quantization: Optional[bool] = field(
         default=False,
         metadata={"help": "Enables loading model in 4bit."},
     )
@@ -191,7 +193,16 @@ def main(args):
     # datasets
     train_dataset, eval_dataset = create_datasets(tokenizer, args)
 
-    trainer = Trainer(model=model, args=training_arguments, train_dataset=train_dataset, eval_dataset=eval_dataset)
+    trainer = SFTTrainer(
+        model,
+        dataset_text_field=args.dataset_text_field,
+        args=training_arguments,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        max_seq_length=args.max_seq_length,
+    )
+
+    # trainer = Trainer(model=model, args=training_arguments, train_dataset=train_dataset, eval_dataset=eval_dataset)
     trainer.accelerator.print(f"{trainer.model}")
 
     if is_deepspeed_enabled:
