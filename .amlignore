@@ -1,0 +1,11 @@
+# Ignore the data folder
+data/
+
+# Ignore the models folder
+models/
+
+**/outputs/
+**/data/
+**/mlruns/
+**/wandb/
+.ruff_cache/
