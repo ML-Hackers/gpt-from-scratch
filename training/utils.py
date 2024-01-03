@@ -98,29 +98,23 @@ def create_datasets(tokenizer, args):
 
 def create_and_prepare_model(args):
 
-    
-    # model = AutoModelForCausalLM.from_pretrained(
-    #     args.model_name,
-    #     load_in_8bit=load_in_8bit,
-    #     quantization_config=bnb_config,
-    #     # use_flash_attention_2=args.use_flash_attn,
-    #     # device_map=device_map,
-    #     # use_cache=not args.use_gradient_checkpointing,
-    #     trust_remote_code=True,
-    #     cache_dir=args.cache_dir,
-    #     token=os.environ.get("HF_API_TOKEN", None)
-    # )
-
-    config = AutoConfig.from_pretrained(
-        args.model_name,
-        # use_flash_attention_2=args.use_flash_attn,
-        # device_map=device_map,
-        # use_cache=not args.use_gradient_checkpointing,
-        trust_remote_code=True,
-        cache_dir=args.cache_dir,
-        token=os.environ.get("HF_API_TOKEN", None)
-    )
-    model = AutoModelForCausalLM.from_config(config)
+    if args.use_pretrained:
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_name,
+            use_flash_attention_2=args.use_flash_attn,
+            trust_remote_code=True,
+            cache_dir=args.cache_dir,
+            token=os.environ.get("HF_API_TOKEN", None)
+        )
+    else:
+        config = AutoConfig.from_pretrained(
+            args.model_name,
+            use_flash_attention_2=args.use_flash_attn,
+            trust_remote_code=True,
+            cache_dir=args.cache_dir,
+            token=os.environ.get("HF_API_TOKEN", None)
+        )
+        model = AutoModelForCausalLM.from_config(config)
     def print_num_params(model):
         num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"Number of parameters in the model: {(num_params / 1e9):.2f}B")
