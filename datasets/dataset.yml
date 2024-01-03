@@ -1,4 +1,4 @@
-name: sentimentdataset
+name: gpt-dataset
 channels:
   - defaults
   - pytorch

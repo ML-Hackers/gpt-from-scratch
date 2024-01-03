@@ -35,7 +35,7 @@ if __name__ == "__main__":
     )
     datastore = Datastore.get(ws, AZURE_DATASTORE)
 
-    env = Environment.from_conda_specification("sentiment_dataset", "datasets/sentiment_dataset/dataset.yml")
+    env = Environment.from_conda_specification("gpt-dataset", "datasets/dataset.yml")
     # env.docker.base_image = None
     # env.docker.base_dockerfile = 'Dockerfile.triton'
     # env.python.user_managed_dependencies = True
@@ -49,7 +49,7 @@ if __name__ == "__main__":
     runconfig.target = CLUSTER_NAME_CPU
 
     output_dataset = (
-        OutputFileDatasetConfig(destination=(datastore, "dataset_sentiment/{run-id}"))
+        OutputFileDatasetConfig(destination=(datastore, "gpt-dataset/{run-id}"))
         .register_on_complete(name=DATASET_OUT_NAME)
         .as_upload()
     )
@@ -61,7 +61,7 @@ if __name__ == "__main__":
         name="Dataset creation",
         command=[
             "python",
-            "datasets/sentiment_dataset/generate_dataset.py",
+            "datasets/generate_dataset.py",
             "--output_folder",
             output_dataset,
             # "--num_samples",
