@@ -1,21 +1,16 @@
-import random
-import torch
 from transformers import (
     TrainerCallback,
     TrainingArguments,
     TrainerState,
     TrainerControl,
 )
-from torch.utils.data import IterableDataset
 from datasets import load_dataset
 from tqdm import tqdm
 import os
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    BitsAndBytesConfig,
-    AutoConfig, 
-    AutoModelForCausalLM
+    AutoConfig,
 )
 
 
@@ -58,6 +53,7 @@ def chars_token_ratio(dataset, tokenizer, data_column, nb_examples=400):
 
     return total_characters / total_tokens
 
+
 def load_from_files(dataset_path: str):
     """
     Load dataset from files.
@@ -79,9 +75,9 @@ def create_datasets(tokenizer, args):
             path=args.dataset_name,
             name=args.dataset_subset,
             use_auth_token=False,
-            num_proc=args.num_workers
+            num_proc=args.num_workers,
         )
-    if (args.dataset_num_entries > 0):
+    if args.dataset_num_entries > 0:
         dataset.select(range(args.dataset_num_entries))
     dataset = dataset["train"].train_test_split(test_size=0.01)
     train_data = dataset["train"]
@@ -91,43 +87,49 @@ def create_datasets(tokenizer, args):
     )
     chars_per_token = chars_token_ratio(train_data, tokenizer, args.dataset_text_field)
     print(f"The character to token ratio of the dataset is: {chars_per_token:.2f}")
-    train_dataset = dataset["train"]
-    valid_dataset = dataset["test"]
+    train_dataset = train_data
+    valid_dataset = valid_data
 
     return train_dataset, valid_dataset
 
 
 def create_and_prepare_model(args):
-
     if args.use_pretrained:
         model = AutoModelForCausalLM.from_pretrained(
             args.model_name,
             use_flash_attention_2=args.use_flash_attn,
             trust_remote_code=True,
             cache_dir=args.cache_dir,
-            token=os.environ.get("HF_API_TOKEN", None)
+            token=os.environ.get("HF_API_TOKEN", None),
         )
     else:
         config = AutoConfig.from_pretrained(
             args.model_name,
-            use_flash_attention_2=args.use_flash_attn,
             trust_remote_code=True,
             cache_dir=args.cache_dir,
-            token=os.environ.get("HF_API_TOKEN", None)
+            torch_dtype="auto",
+            token=os.environ.get("HF_API_TOKEN", None),
         )
-        model = AutoModelForCausalLM.from_config(config)
+        model = AutoModelForCausalLM.from_config(
+            config, trust_remote_code=True, use_flash_attention_2=args.use_flash_attn
+        )
+        print("Model config", model.dtype)
+
     def print_num_params(model):
         num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         print(f"Number of parameters in the model: {(num_params / 1e9):.2f}B")
 
     print_num_params(model)
     model.init_weights()
-    
+
     if args.use_gradient_checkpointing:
         model.gradient_checkpointing_enable()
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True,
-                                              token=os.environ.get("HF_API_TOKEN", None))
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_name,
+        trust_remote_code=True,
+        token=os.environ.get("HF_API_TOKEN", None),
+    )
     tokenizer.pad_token = tokenizer.eos_token
 
     return model, tokenizer

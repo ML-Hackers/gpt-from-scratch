@@ -5,14 +5,9 @@ import yaml
 from typing import Optional
 
 from transformers import HfArgumentParser, TrainingArguments
-from transformers import Trainer
 from trl import SFTTrainer
 
-from utils import (
-    SaveDeepSpeedModelCallback,
-    create_and_prepare_model,
-    create_datasets
-)
+from utils import SaveDeepSpeedModelCallback, create_and_prepare_model, create_datasets
 
 
 # Define and parse arguments.
@@ -51,12 +46,13 @@ class ScriptArguments:
         metadata={"help": "The path to local dataset to use."},
     )
     dataset_subset: Optional[str] = field(
-        default="",
-        metadata={"help": "Subset of the dataset to use"}
+        default="", metadata={"help": "Subset of the dataset to use"}
     )
     dataset_num_entries: Optional[int] = field(
         default=-1,
-        metadata={"help": "Number of entries from the dataset to use. Set to -1 to use all entries."}
+        metadata={
+            "help": "Number of entries from the dataset to use. Set to -1 to use all entries."
+        },
     )
     num_train_epochs: Optional[int] = field(
         default=1,
@@ -73,10 +69,6 @@ class ScriptArguments:
     packing: Optional[bool] = field(
         default=False,
         metadata={"help": "Use packing dataset creating."},
-    )
-    gradient_checkpointing: Optional[bool] = field(
-        default=True,
-        metadata={"help": "Enables gradient checkpointing."},
     )
     optim: Optional[str] = field(
         default="adamw_torch",
@@ -102,7 +94,7 @@ class ScriptArguments:
         default=10, metadata={"help": "Log every X updates steps."}
     )
     output_dir: str = field(
-        default="results", metadata={"help": "Where to store the final model."}
+        default="outputs", metadata={"help": "Where to store the final model."}
     )
     use_flash_attn: Optional[bool] = field(
         default=False,
@@ -129,7 +121,8 @@ class ScriptArguments:
         },
     )
     cache_dir: Optional[str] = field(
-        default=None, metadata={"help": "Where to store the pretrained models downloaded"}
+        default=None,
+        metadata={"help": "Where to store the pretrained models downloaded"},
     )
     use_pretrained: Optional[bool] = field(
         default=False, metadata={"help": "Whether to use pretrained model"}
@@ -137,6 +130,9 @@ class ScriptArguments:
 
 
 def main(args):
+    import torch
+
+    torch.backends.cuda.matmul.allow_tf32 = True
     # training arguments
     is_deepspeed_enabled = (
         os.environ.get("ACCELERATE_USE_DEEPSPEED", "False").lower() == "true"
@@ -178,10 +174,10 @@ def main(args):
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         max_seq_length=args.max_seq_length,
-        dataset_num_proc=args.num_workers
+        dataset_num_proc=args.num_workers,
     )
 
-    # trainer = Trainer(model=model, args=training_arguments, train_dataset=train_dataset, eval_dataset=eval_dataset)
+    # trainer = Trainer(model=model, args=training_arguments, train_dataset=train_dataset, eval_dataset=eval_dataset, data_collator=data_collator)
     trainer.accelerator.print(f"{trainer.model}")
 
     if is_deepspeed_enabled:
@@ -201,7 +197,7 @@ def main(args):
         # state_dict = trainer.accelerator.get_state_dict(trainer.deepspeed)
         # unwrapped_model = trainer.accelerator.unwrap_model(trainer.deepspeed)
         # if trainer.accelerator.is_main_process:
-            # unwrapped_model.save_pretrained(args.output_dir, state_dict=state_dict)
+        # unwrapped_model.save_pretrained(args.output_dir, state_dict=state_dict)
         trainer.save_model(args.output_dir)
         # trainer.accelerator.wait_for_everyone()
     else:
