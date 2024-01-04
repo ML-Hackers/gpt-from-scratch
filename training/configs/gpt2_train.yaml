@@ -6,9 +6,9 @@ logging_steps: 100
 eval_steps: 1000
 save_steps: 5000
 bf16: True
-packing: True
-per_device_train_batch_size: 4
-gradient_accumulation_steps: 2
+packing: False
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
 dataset_text_field: "text"
 use_gradient_checkpointing: False
 use_flash_attn: False
@@ -16,3 +16,4 @@ dataset_name: timdettmers/openassistant-guanaco
 dataset_subset: 20231101.fi
 num_workers: 6
 dataset_filter: 1000000
+optim: adamw_hf
