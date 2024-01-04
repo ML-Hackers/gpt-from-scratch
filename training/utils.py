@@ -83,6 +83,7 @@ def create_datasets(tokenizer, args):
         )
     if (args.dataset_num_entries > 0):
         dataset.select(range(args.dataset_num_entries))
+    dataset = dataset["train"].train_test_split(test_size=0.01)
     train_data = dataset["train"]
     valid_data = dataset["test"]
     print(
