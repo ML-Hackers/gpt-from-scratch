@@ -13,7 +13,6 @@ from azureml.core.runconfig import RunConfiguration, DockerConfiguration
 from azureml.pipeline.core import Pipeline
 from azureml.pipeline.steps import CommandStep
 from azureml.data import OutputFileDatasetConfig
-from azureml.core import Dataset
 from consts import (
     AZURE_DATASTORE,
     AZURE_ENV_VARIABLES,
@@ -21,7 +20,6 @@ from consts import (
     AZURE_SUBSCRIPTION_ID,
     AZURE_TENANT_ID,
     AZURE_WORKSPACE_NAME,
-    DATASET_OUT_NAME,
     LLM_OUT_NAME,
     CLUSTER_NAME_GPU,
 )
@@ -54,16 +52,14 @@ if __name__ == "__main__":
     runconfig.target = CLUSTER_NAME_GPU
 
     output_dataset = (
-        OutputFileDatasetConfig(
-            destination=(datastore, "llm/{run-id}")
-        )
+        OutputFileDatasetConfig(destination=(datastore, "llm/{run-id}"))
         .register_on_complete(name=LLM_OUT_NAME)
         .as_mount()
     )
     # input_folder = Dataset.get_by_name(
     #     ws, name=DATASET_OUT_NAME,
     # ).as_download()
-    
+
     parent_directory = os.path.dirname(os.path.abspath(__file__))
     source_directory = os.path.join(parent_directory, "..")
 
@@ -84,7 +80,6 @@ if __name__ == "__main__":
             output_dataset,
         ],
         outputs=[output_dataset],
-        
         source_directory=source_directory,
         runconfig=runconfig,
         allow_reuse=False,
