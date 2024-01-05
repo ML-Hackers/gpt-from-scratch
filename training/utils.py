@@ -8,10 +8,8 @@ from transformers import (
 )
 from transformers.trainer_utils import (
     PREFIX_CHECKPOINT_DIR,
-    TRAINER_STATE_NAME,
 )
 from trl import SFTTrainer
-import logger
 import numpy as np
 
 
@@ -124,10 +122,6 @@ class CustomTrainer(SFTTrainer):
         run_dir = self._get_output_dir(trial=trial)
         output_dir = os.path.join(run_dir, checkpoint_folder)
         if os.path.exists(output_dir) and len(os.listdir(output_dir)) > 0:
-            logger.warning(
-                f"Checkpoint destination directory {output_dir} already exists and is non-empty."
-                "Saving will proceed but saved results may be invalid."
-            )
             staging_output_dir = output_dir
         else:
             staging_output_dir = os.path.join(run_dir, f"tmp-{checkpoint_folder}")
@@ -156,6 +150,8 @@ class CustomTrainer(SFTTrainer):
                 self.state.best_model_checkpoint = output_dir
 
         # Save the Trainer state
+        TRAINER_STATE_NAME = "trainer_state.json"
+
         if self.args.should_save:
             self.state.save_to_json(
                 os.path.join(staging_output_dir, TRAINER_STATE_NAME)
