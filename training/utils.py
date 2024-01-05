@@ -1,9 +1,3 @@
-from transformers import (
-    TrainerCallback,
-    TrainingArguments,
-    TrainerState,
-    TrainerControl,
-)
 from datasets import load_dataset
 from tqdm import tqdm
 import os
@@ -12,34 +6,13 @@ from transformers import (
     AutoTokenizer,
     AutoConfig,
 )
-
-
-class SaveDeepSpeedModelCallback(TrainerCallback):
-    def __init__(self, trainer, save_steps=500):
-        self.trainer = trainer
-        self.save_steps = save_steps
-
-    def on_step_end(
-        self,
-        args: TrainingArguments,
-        state: TrainerState,
-        control: TrainerControl,
-        **kwargs,
-    ):
-        if (state.global_step + 1) % self.save_steps == 0:
-            # self.trainer.accelerator.wait_for_everyone()
-            # state_dict = self.trainer.accelerator.get_state_dict(self.trainer.deepspeed)
-            # unwrapped_model = self.trainer.accelerator.unwrap_model(
-            #     self.trainer.deepspeed
-            # )
-            if self.trainer.accelerator.is_main_process:
-                print("Saving model checkpoint to:", args.output_dir)
-                # unwrapped_model.save_pretrained(args.output_dir, state_dict=state_dict)
-            self.trainer.save_model(
-                os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
-            )
-            # self.trainer.accelerator.wait_for_everyone()
-        return control
+from transformers.trainer_utils import (
+    PREFIX_CHECKPOINT_DIR,
+    TRAINER_STATE_NAME,
+)
+from trl import SFTTrainer
+import logger
+import numpy as np
 
 
 def chars_token_ratio(dataset, tokenizer, data_column, nb_examples=400):
@@ -109,6 +82,7 @@ def create_and_prepare_model(args):
             cache_dir=args.cache_dir,
             torch_dtype="auto",
             token=os.environ.get("HF_API_TOKEN", None),
+            use_bfloat16=args.bf16,
         )
         model = AutoModelForCausalLM.from_config(
             config, trust_remote_code=True, use_flash_attention_2=args.use_flash_attn
@@ -133,3 +107,84 @@ def create_and_prepare_model(args):
     tokenizer.pad_token = tokenizer.eos_token
 
     return model, tokenizer
+
+
+class CustomTrainer(SFTTrainer):
+    def _save_checkpoint(self, model, trial, metrics=None):
+        # In all cases, including ddp/dp/deepspeed, self.model is always a reference to the model we
+        # want to save except FullyShardedDDP.
+        # assert unwrap_model(model) is self.model, "internal model should be a reference to self.model"
+
+        # Save model checkpoint
+        checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+
+        if self.hp_search_backend is None and trial is None:
+            self.store_flos()
+
+        run_dir = self._get_output_dir(trial=trial)
+        output_dir = os.path.join(run_dir, checkpoint_folder)
+        if os.path.exists(output_dir) and len(os.listdir(output_dir)) > 0:
+            logger.warning(
+                f"Checkpoint destination directory {output_dir} already exists and is non-empty."
+                "Saving will proceed but saved results may be invalid."
+            )
+            staging_output_dir = output_dir
+        else:
+            staging_output_dir = os.path.join(run_dir, f"tmp-{checkpoint_folder}")
+        self.save_model(staging_output_dir, _internal_call=True)
+
+        if not self.args.save_only_model:
+            # Save optimizer and scheduler
+            self._save_optimizer_and_scheduler(staging_output_dir)
+            # Save RNG state
+            self._save_rng_state(staging_output_dir)
+
+        # Determine the new best metric / best model checkpoint
+        if metrics is not None and self.args.metric_for_best_model is not None:
+            metric_to_check = self.args.metric_for_best_model
+            if not metric_to_check.startswith("eval_"):
+                metric_to_check = f"eval_{metric_to_check}"
+            metric_value = metrics[metric_to_check]
+
+            operator = np.greater if self.args.greater_is_better else np.less
+            if (
+                self.state.best_metric is None
+                or self.state.best_model_checkpoint is None
+                or operator(metric_value, self.state.best_metric)
+            ):
+                self.state.best_metric = metric_value
+                self.state.best_model_checkpoint = output_dir
+
+        # Save the Trainer state
+        if self.args.should_save:
+            self.state.save_to_json(
+                os.path.join(staging_output_dir, TRAINER_STATE_NAME)
+            )
+
+        if self.args.push_to_hub:
+            self._push_from_checkpoint(staging_output_dir)
+
+        # Place checkpoint in final location after all saving is finished.
+        # First wait for everyone to finish writing
+        self.args.distributed_state.wait_for_everyone()
+        # Then go through the rewriting process starting on process 0
+
+        if staging_output_dir != output_dir:
+            with self.args.main_process_first(
+                desc="Renaming model checkpoint folder to true location",
+                local=self.args.save_on_each_node,
+            ):
+                if os.path.exists(staging_output_dir):
+                    try:
+                        os.rename(staging_output_dir, output_dir)
+                    except Exception:
+                        print("Error renaming checkpoint directory, skipping")
+                    pass
+
+        # Maybe delete some older checkpoints.
+        if self.args.should_save:
+            try:
+                self._rotate_checkpoints(use_mtime=True, output_dir=run_dir)
+            except Exception:
+                print("Error rotating checkpoints, skipping")
+                pass

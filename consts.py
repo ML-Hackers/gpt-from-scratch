@@ -10,7 +10,7 @@ AZURE_RESOURCE_GROUP = lambda: os.environ.get("AZURE_RESOURCE_GROUP")
 AZURE_WORKSPACE_NAME = lambda: os.environ.get("AZURE_WORKSPACE_NAME")
 
 CLUSTER_NAME_CPU = "cpu-small"
-CLUSTER_NAME_GPU = "A100x2-low"
+CLUSTER_NAME_GPU = "A100-low"
 AZURE_DATASTORE = "llm_training"
 DATASET_OUT_NAME = "dataset"
 LLM_OUT_NAME = "llm_trained_model"

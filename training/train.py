@@ -1,13 +1,13 @@
 from dataclasses import dataclass, field
+import glob
 import os
 import subprocess
 import yaml
 from typing import Optional
 
 from transformers import HfArgumentParser, TrainingArguments
-from trl import SFTTrainer
 
-from utils import SaveDeepSpeedModelCallback, create_and_prepare_model, create_datasets
+from utils import CustomTrainer, create_and_prepare_model, create_datasets
 
 
 # Define and parse arguments.
@@ -86,9 +86,6 @@ class ScriptArguments:
     warmup_ratio: float = field(
         default=0.03, metadata={"help": "Fraction of steps to do a warmup for"}
     )
-    save_steps: int = field(
-        default=10, metadata={"help": "Save checkpoint every X updates steps."}
-    )
     eval_steps: int = field(default=10, metadata={"help": "Eval model every X steps."})
     logging_steps: int = field(
         default=10, metadata={"help": "Log every X updates steps."}
@@ -127,17 +124,24 @@ class ScriptArguments:
     use_pretrained: Optional[bool] = field(
         default=False, metadata={"help": "Whether to use pretrained model"}
     )
+    resume_from_checkpoint: Optional[bool] = field(
+        default=True, metadata={"help": "Whether to resume from checkpoint"}
+    )
+    save_total_limit: Optional[int] = field(
+        default=5, metadata={"help": "Number of checkpoints to save"}
+    )
+    load_best_model_at_end: Optional[bool] = field(
+        default=True, metadata={"help": "Whether to load best model at the end"}
+    )
 
 
 def main(args):
     import torch
 
     torch.backends.cuda.matmul.allow_tf32 = True
+
     # training arguments
-    is_deepspeed_enabled = (
-        os.environ.get("ACCELERATE_USE_DEEPSPEED", "False").lower() == "true"
-    )
-    save_strategy = "no" if is_deepspeed_enabled else "steps"
+    save_strategy = "steps"
     training_arguments = TrainingArguments(
         output_dir=args.output_dir,
         per_device_train_batch_size=args.per_device_train_batch_size,
@@ -154,7 +158,9 @@ def main(args):
         save_strategy=save_strategy,
         max_steps=args.max_steps,
         eval_steps=args.eval_steps,
-        save_steps=args.save_steps,
+        save_steps=args.eval_steps,
+        save_total_limit=args.save_total_limit,
+        load_best_model_at_end=args.load_best_model_at_end,
         logging_steps=args.logging_steps,
         push_to_hub=args.push_to_hub,
         gradient_checkpointing=args.use_gradient_checkpointing,
@@ -167,7 +173,7 @@ def main(args):
     # datasets
     train_dataset, eval_dataset = create_datasets(tokenizer, args)
 
-    trainer = SFTTrainer(
+    trainer = CustomTrainer(
         model,
         dataset_text_field=args.dataset_text_field,
         args=training_arguments,
@@ -179,34 +185,22 @@ def main(args):
 
     # trainer = Trainer(model=model, args=training_arguments, train_dataset=train_dataset, eval_dataset=eval_dataset, data_collator=data_collator)
     trainer.accelerator.print(f"{trainer.model}")
-
-    if is_deepspeed_enabled:
-        trainer.add_callback(
-            SaveDeepSpeedModelCallback(trainer, save_steps=args.save_steps)
-        )
+    print(os.environ)
+    print("MAIN PROCESS", trainer.args.process_index)
 
     # train
-    trainer.train()
+    last_checkpoint = None
+
+    if (
+        glob.glob(os.path.join(args.output_dir, "checkpoint-*/**"))
+        and args.resume_from_checkpoint
+    ):
+        last_checkpoint = True
+    trainer.train(resume_from_checkpoint=last_checkpoint)
 
     # saving final model
     if trainer.is_fsdp_enabled:
         trainer.accelerator.state.fsdp_plugin.set_state_dict_type("FULL_STATE_DICT")
-
-    if is_deepspeed_enabled:
-        # trainer.accelerator.wait_for_everyone()
-        # state_dict = trainer.accelerator.get_state_dict(trainer.deepspeed)
-        # unwrapped_model = trainer.accelerator.unwrap_model(trainer.deepspeed)
-        # if trainer.accelerator.is_main_process:
-        # unwrapped_model.save_pretrained(args.output_dir, state_dict=state_dict)
-        trainer.save_model(args.output_dir)
-        # trainer.accelerator.wait_for_everyone()
-    else:
-        if args.push_to_hub:
-            trainer.push_to_hub()
-        else:
-            trainer.save_model(args.output_dir)
-            # Save the tokenizer to args.output_dir
-            tokenizer.save_pretrained(args.output_dir)
 
     # Save everything else on main process
     if trainer.args.process_index == 0:
