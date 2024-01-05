@@ -183,10 +183,7 @@ def main(args):
         dataset_num_proc=args.num_workers,
     )
 
-    # trainer = Trainer(model=model, args=training_arguments, train_dataset=train_dataset, eval_dataset=eval_dataset, data_collator=data_collator)
     trainer.accelerator.print(f"{trainer.model}")
-    print(os.environ)
-    print("MAIN PROCESS", trainer.args.process_index)
 
     # train
     last_checkpoint = None
