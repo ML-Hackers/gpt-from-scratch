@@ -4,6 +4,8 @@ import os
 load_dotenv()
 
 
+# Lambda functions are used to allow the evaluation of environment variables after the call
+# load_dotenv() can be used in the main process to reload the environment variables
 AZURE_TENANT_ID = lambda: os.environ.get("AZURE_TENANT_ID")
 AZURE_SUBSCRIPTION_ID = lambda: os.environ.get("AZURE_SUBSCRIPTION_ID")
 AZURE_RESOURCE_GROUP = lambda: os.environ.get("AZURE_RESOURCE_GROUP")

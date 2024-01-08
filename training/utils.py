@@ -107,6 +107,8 @@ def create_and_prepare_model(args):
     return model, tokenizer
 
 
+# Custom trainer to catch errors wthen distributed training tries to delete folder from multiple machines
+# in the same shared location
 class CustomTrainer(SFTTrainer):
     def _save_checkpoint(self, model, trial, metrics=None):
         # In all cases, including ddp/dp/deepspeed, self.model is always a reference to the model we

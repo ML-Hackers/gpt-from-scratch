@@ -164,7 +164,6 @@ def main(args):
         logging_steps=args.logging_steps,
         push_to_hub=args.push_to_hub,
         gradient_checkpointing=args.use_gradient_checkpointing,
-        # ddp_timeout=7200,
     )
 
     # model
