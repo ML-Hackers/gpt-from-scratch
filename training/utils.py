@@ -1,126 +1,16 @@
-import random
-import torch
-from transformers import (
-    TrainerCallback,
-    TrainingArguments,
-    TrainerState,
-    TrainerControl,
-)
-from torch.utils.data import IterableDataset
 from datasets import load_dataset
 from tqdm import tqdm
 import os
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    BitsAndBytesConfig,
+    AutoConfig,
 )
-from langchain.prompts import ChatPromptTemplate, ChatMessagePromptTemplate
-from langchain.schema.messages import SystemMessage
-from prompts import template
-
-
-class SaveDeepSpeedModelCallback(TrainerCallback):
-    def __init__(self, trainer, save_steps=500):
-        self.trainer = trainer
-        self.save_steps = save_steps
-
-    def on_step_end(
-        self,
-        args: TrainingArguments,
-        state: TrainerState,
-        control: TrainerControl,
-        **kwargs,
-    ):
-        if (state.global_step + 1) % self.save_steps == 0:
-            # self.trainer.accelerator.wait_for_everyone()
-            # state_dict = self.trainer.accelerator.get_state_dict(self.trainer.deepspeed)
-            # unwrapped_model = self.trainer.accelerator.unwrap_model(
-            #     self.trainer.deepspeed
-            # )
-            if self.trainer.accelerator.is_main_process:
-                print("Saving model checkpoint to:", args.output_dir)
-                # unwrapped_model.save_pretrained(args.output_dir, state_dict=state_dict)
-            self.trainer.save_model(
-                os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
-            )
-            # self.trainer.accelerator.wait_for_everyone()
-        return control
-
-
-class ConstantLengthDataset(IterableDataset):
-    """
-    Iterable dataset that returns constant length chunks of tokens from stream of text files.
-        Args:
-            tokenizer (Tokenizer): The processor used for proccessing the data.
-            dataset (dataset.Dataset): Dataset with text files.
-            infinite (bool): If True the iterator is reset after dataset reaches end else stops.
-            seq_length (int): Length of token sequences to return.
-            num_of_sequences (int): Number of token sequences to keep in buffer.
-            chars_per_token (int): Number of characters per token used to estimate number of tokens in text buffer.
-            shuffle (bool): If true, the samples in each buffer are suffled. Default is `True`.
-            add_eos_token (bool): If true, each buffer is delimited with eos token. Default is `True`.
-    """
-
-    def __init__(
-        self,
-        tokenizer,
-        dataset,
-        infinite=False,
-        seq_length=1024,
-        num_of_sequences=1024,
-        chars_per_token=3.6,
-        content_field="content",
-        shuffle=True,
-        add_eos_token=True,
-    ):
-        self.tokenizer = tokenizer
-        self.concat_token_id = tokenizer.eos_token_id
-        self.dataset = dataset
-        self.seq_length = seq_length
-        self.infinite = infinite
-        self.current_size = 0
-        self.max_buffer_size = seq_length * chars_per_token * num_of_sequences
-        self.content_field = content_field
-        self.shuffle = shuffle
-        self.add_eos_token = add_eos_token
-
-    def __iter__(self):
-        iterator = iter(self.dataset)
-        more_examples = True
-        while more_examples:
-            buffer, buffer_len = [], 0
-            while True:
-                if buffer_len >= self.max_buffer_size:
-                    break
-                try:
-                    buffer.append(next(iterator)[self.content_field])
-                    buffer_len += len(buffer[-1])
-                except StopIteration:
-                    if self.infinite:
-                        iterator = iter(self.dataset)
-                    else:
-                        more_examples = False
-                        break
-            tokenized_inputs = self.tokenizer(buffer, truncation=False)["input_ids"]
-            all_token_ids = []
-            for tokenized_input in tokenized_inputs:
-                if self.add_eos_token:
-                    tokenized_input = tokenized_input + [self.concat_token_id]
-                all_token_ids.extend(tokenized_input)
-            examples = []
-            for i in range(0, len(all_token_ids), self.seq_length):
-                input_ids = all_token_ids[i : i + self.seq_length]
-                if len(input_ids) == self.seq_length:
-                    examples.append(input_ids)
-            if self.shuffle:
-                random.shuffle(examples)
-            for example in examples:
-                self.current_size += 1
-                yield {
-                    "input_ids": torch.LongTensor(example),
-                    "labels": torch.LongTensor(example),
-                }
+from transformers.trainer_utils import (
+    PREFIX_CHECKPOINT_DIR,
+)
+from trl import SFTTrainer
+import numpy as np
 
 
 def chars_token_ratio(dataset, tokenizer, data_column, nb_examples=400):
@@ -135,17 +25,9 @@ def chars_token_ratio(dataset, tokenizer, data_column, nb_examples=400):
     return total_characters / total_tokens
 
 
-def load_sentimentdataset_from_files(dataset_path: str, tokenizer):
+def load_from_files(dataset_path: str):
     """
-    Load dataset from files and preprocess it for sentiment understanding.
-
-    Args:
-        dataset_path (str): The path to the dataset directory.
-        tokenizer: The tokenizer object used for tokenization.
-
-    Returns:
-        dataset: The preprocessed dataset.
-
+    Load dataset from files.
     """
     data_files = {
         "train": os.path.join(dataset_path, "train_dataset.csv"),
@@ -153,47 +35,22 @@ def load_sentimentdataset_from_files(dataset_path: str, tokenizer):
     }
     dataset = load_dataset("csv", data_files=data_files)
 
-    eos_token = tokenizer.eos_token
-
-    def preprocess(samples, skip_target=False):
-        batch = []
-        for input_text, output_text in zip(samples["text"], samples["label"]):
-            output_text = {-1: "negative", 0: "neutral", 1: "positive"}.get(output_text)
-            prompt = ChatPromptTemplate.from_messages(
-                [
-                    SystemMessage(
-                        content=(
-                            "You are an expert in sentiment understanding, analyse the statement and respond in one word: positive, negative, or neutral."
-                        )
-                    ),
-                    ChatMessagePromptTemplate.from_template(
-                        role="User", template=template, input_variables=["input"]
-                    ),
-                ]
-            )
-            formatted_conv = prompt.format(input=input_text)
-            if not skip_target:
-                formatted_conv += f"Assistant: {output_text} {eos_token}"
-
-            batch.append(formatted_conv)
-        return {"content": batch}
-
-    dataset = dataset.map(
-        preprocess, batched=True, remove_columns=dataset["train"].column_names
-    )
     return dataset
 
 
 def create_datasets(tokenizer, args):
     if args.dataset_path:
-        dataset = load_sentimentdataset_from_files(args.dataset_path, tokenizer)
+        dataset = load_from_files(args.dataset_path)
     else:
         dataset = load_dataset(
-            args.dataset_name,
+            path=args.dataset_name,
+            name=args.dataset_subset,
             use_auth_token=False,
             num_proc=args.num_workers,
-            download_mode="force_redownload",
         )
+    if args.dataset_num_entries > 0:
+        dataset.select(range(args.dataset_num_entries))
+    dataset = dataset["train"].train_test_split(test_size=0.01)
     train_data = dataset["train"]
     valid_data = dataset["test"]
     print(
@@ -201,76 +58,131 @@ def create_datasets(tokenizer, args):
     )
     chars_per_token = chars_token_ratio(train_data, tokenizer, args.dataset_text_field)
     print(f"The character to token ratio of the dataset is: {chars_per_token:.2f}")
-    train_dataset = dataset["train"]
-    valid_dataset = dataset["test"]
-
-    # train_dataset = ConstantLengthDataset(
-    #     tokenizer,
-    #     train_data,
-    #     infinite=True,
-    #     seq_length=args.max_seq_length,
-    #     chars_per_token=chars_per_token,
-    #     content_field=args.dataset_text_field,
-    #     shuffle=True,
-    #     add_eos_token=False,
-    # )
-    # valid_dataset = ConstantLengthDataset(
-    #     tokenizer,
-    #     valid_data,
-    #     infinite=False,
-    #     seq_length=args.max_seq_length,
-    #     chars_per_token=chars_per_token,
-    #     content_field=args.dataset_text_field,
-    #     shuffle=False,
-    #     add_eos_token=False,
-    # )
+    train_dataset = train_data
+    valid_dataset = valid_data
 
     return train_dataset, valid_dataset
 
 
 def create_and_prepare_model(args):
-    bnb_config = None
-    load_in_8bit = args.use_8bit_qunatization
-
-    if args.use_4bit_qunatization:
-        print("USING 4BIT QUANTIZATION")
-        compute_dtype = getattr(torch, args.bnb_4bit_compute_dtype)
-
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=args.use_4bit_qunatization,
-            bnb_4bit_quant_type=args.bnb_4bit_quant_type,
-            bnb_4bit_compute_dtype=compute_dtype,
-            bnb_4bit_use_double_quant=args.use_nested_quant,
+    if args.use_pretrained:
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model_name,
+            use_flash_attention_2=args.use_flash_attn,
+            trust_remote_code=True,
+            cache_dir=args.cache_dir,
+            token=os.environ.get("HF_API_TOKEN", None),
         )
+    else:
+        config = AutoConfig.from_pretrained(
+            args.model_name,
+            trust_remote_code=True,
+            cache_dir=args.cache_dir,
+            torch_dtype="auto",
+            token=os.environ.get("HF_API_TOKEN", None),
+            use_bfloat16=args.bf16,
+        )
+        model = AutoModelForCausalLM.from_config(
+            config, trust_remote_code=True, use_flash_attention_2=args.use_flash_attn
+        )
+        print("Model config", model.dtype)
 
-        if compute_dtype == torch.float16 and args.use_4bit_qunatization:
-            major, _ = torch.cuda.get_device_capability()
-            if major >= 8:
-                print("=" * 80)
-                print(
-                    "Your GPU supports bfloat16, you can accelerate training with the argument --bf16"
-                )
-                print("=" * 80)
+    def print_num_params(model):
+        num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        print(f"Number of parameters in the model: {(num_params / 1e9):.2f}B")
 
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_name,
-        load_in_8bit=load_in_8bit,
-        quantization_config=bnb_config,
-        use_flash_attention_2=args.use_flash_attn,
-        # device_map=device_map,
-        # use_cache=not args.use_gradient_checkpointing,
-        trust_remote_code=True,
-        cache_dir=args.cache_dir,
-        token=os.environ.get("HF_API_TOKEN", None)
-    )
+    print_num_params(model)
     model.init_weights()
-
 
     if args.use_gradient_checkpointing:
         model.gradient_checkpointing_enable()
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True,
-                                              token=os.environ.get("HF_API_TOKEN", None))
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_name,
+        trust_remote_code=True,
+        token=os.environ.get("HF_API_TOKEN", None),
+    )
     tokenizer.pad_token = tokenizer.eos_token
 
     return model, tokenizer
+
+
+# Custom trainer to catch errors wthen distributed training tries to delete folder from multiple machines
+# in the same shared location
+class CustomTrainer(SFTTrainer):
+    def _save_checkpoint(self, model, trial, metrics=None):
+        # In all cases, including ddp/dp/deepspeed, self.model is always a reference to the model we
+        # want to save except FullyShardedDDP.
+        # assert unwrap_model(model) is self.model, "internal model should be a reference to self.model"
+
+        # Save model checkpoint
+        checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+
+        if self.hp_search_backend is None and trial is None:
+            self.store_flos()
+
+        run_dir = self._get_output_dir(trial=trial)
+        output_dir = os.path.join(run_dir, checkpoint_folder)
+        if os.path.exists(output_dir) and len(os.listdir(output_dir)) > 0:
+            staging_output_dir = output_dir
+        else:
+            staging_output_dir = os.path.join(run_dir, f"tmp-{checkpoint_folder}")
+        self.save_model(staging_output_dir, _internal_call=True)
+
+        if not self.args.save_only_model:
+            # Save optimizer and scheduler
+            self._save_optimizer_and_scheduler(staging_output_dir)
+            # Save RNG state
+            self._save_rng_state(staging_output_dir)
+
+        # Determine the new best metric / best model checkpoint
+        if metrics is not None and self.args.metric_for_best_model is not None:
+            metric_to_check = self.args.metric_for_best_model
+            if not metric_to_check.startswith("eval_"):
+                metric_to_check = f"eval_{metric_to_check}"
+            metric_value = metrics[metric_to_check]
+
+            operator = np.greater if self.args.greater_is_better else np.less
+            if (
+                self.state.best_metric is None
+                or self.state.best_model_checkpoint is None
+                or operator(metric_value, self.state.best_metric)
+            ):
+                self.state.best_metric = metric_value
+                self.state.best_model_checkpoint = output_dir
+
+        # Save the Trainer state
+        TRAINER_STATE_NAME = "trainer_state.json"
+
+        if self.args.should_save:
+            self.state.save_to_json(
+                os.path.join(staging_output_dir, TRAINER_STATE_NAME)
+            )
+
+        if self.args.push_to_hub:
+            self._push_from_checkpoint(staging_output_dir)
+
+        # Place checkpoint in final location after all saving is finished.
+        # First wait for everyone to finish writing
+        self.args.distributed_state.wait_for_everyone()
+        # Then go through the rewriting process starting on process 0
+
+        if staging_output_dir != output_dir:
+            with self.args.main_process_first(
+                desc="Renaming model checkpoint folder to true location",
+                local=self.args.save_on_each_node,
+            ):
+                if os.path.exists(staging_output_dir):
+                    try:
+                        os.rename(staging_output_dir, output_dir)
+                    except Exception:
+                        print("Error renaming checkpoint directory, skipping")
+                    pass
+
+        # Maybe delete some older checkpoints.
+        if self.args.should_save:
+            try:
+                self._rotate_checkpoints(use_mtime=True, output_dir=run_dir)
+            except Exception:
+                print("Error rotating checkpoints, skipping")
+                pass
